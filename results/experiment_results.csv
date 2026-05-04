@@ -1,0 +1,6 @@
+Experiment,Popis,Precision@10,Recall@10,F1@10,N users
+baseline,"tags_string, (1, 1), max_features = None",0.0794,0.0923,0.0854,428
+exp2_authors,"tags + authors, (1, 1)",0.0794,0.0922,0.0854,428
+exp3_top10,"top 10 tagov, (1, 1)",0.0687,0.0857,0.0763,428
+exp4_top50,"top 50 tagov (1, 1)",0.0794,0.0923,0.0854,428
+exp5_maxfeat,"tags_string, max_features=5000",0.0806,0.0957,0.0875,428
