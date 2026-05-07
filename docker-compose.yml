@@ -11,7 +11,7 @@ services:
       - ./models:/app/models
       - ./results:/app/results
     environment:
-      - BOOKS_MODEL_PATH=/app/data/sample/books_model.csv
+      - BOOKS_MODEL_PATH=/app/data/books_model.csv
       - EXPERIMENTS_PATH=/app/results/experiment_results.csv
 
   gui:
