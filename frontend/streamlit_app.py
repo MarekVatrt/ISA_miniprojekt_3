@@ -145,21 +145,6 @@ with tabs[1]:
     """)
 
 with tabs[2]:
-    st.header("Quality risks and deployment risks")
-    st.markdown("""
-    | Risk | Impact | Mitigation in this app |
-    |---|---|---|
-    | Cold start user has no history | No personalized vector | Global popularity and genre fallback |
-    | Noisy Goodreads tags like `to-read`, `favorites` | Bad content representation | MP1 preprocessing removes filler tags and uses top 50 tag profile |
-    | Popularity bias | Highly rated/popular books dominate | Hybrid weights are adjustable; similarity can be prioritized |
-    | Sparse user histories in evaluation | Low absolute Precision@10 | Metrics are interpreted against random baseline; qualitative tests included |
-    | Duplicate or confusing IDs | Wrong joins | MP1 renamed `id` → `record_id`, `book_id` → `goodreads_book_id` |
-    | Memory use of full cosine matrix | 10k × 10k can be large | API loads once; for larger datasets use nearest-neighbor search/FAISS |
-    | Feedback not used for retraining yet | No learning from users | Feedback buttons save data for future supervised/reranking step |
-    """)
-    st.info("Improvement proposal for 3.1.C: use saved useful/not-useful feedback to learn a reranker, personalize tag weights, and monitor recommendation drift.")
-
-with tabs[3]:
     st.header("Installation manual")
     st.code("docker compose up --build", language="bash")
     st.write("Open GUI at http://localhost:8501 and API docs at http://localhost:8000/docs.")

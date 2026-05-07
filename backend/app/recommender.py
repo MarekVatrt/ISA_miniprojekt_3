@@ -65,11 +65,6 @@ class ContentBasedBookRecommender:
         self.books_df["average_rating"] = pd.to_numeric(
             self.books_df["average_rating"], errors="coerce"
         ).fillna(0)
-        if "ratings_count" not in self.books_df.columns:
-            self.books_df["ratings_count"] = 1
-        self.books_df["ratings_count"] = pd.to_numeric(
-            self.books_df["ratings_count"], errors="coerce"
-        ).fillna(1)
         if "popularity_score" not in self.books_df.columns:
             # Approximation compatible with the notebook's popularity usage: rating * log(1 + count).
             self.books_df["popularity_score"] = self.books_df[
