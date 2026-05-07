@@ -144,7 +144,7 @@ with tabs[1]:
     **Quality evaluation approach:** leave-one-out on sampled users. For each user, ratings ≥ 4 are relevant books; one is used as query and the rest are ground truth. Metrics: Precision@K, Recall@K, F1@K.
     """)
 
-with tabs[2]:
+with tabs[3]:
     st.header("Installation manual")
     st.code("docker compose up --build", language="bash")
     st.write("Open GUI at http://localhost:8501 and API docs at http://localhost:8000/docs.")
