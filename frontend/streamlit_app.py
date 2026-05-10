@@ -32,6 +32,76 @@ def api_post(path: str, payload: dict[str, Any]) -> dict[str, Any]:
     return r.json()
 
 
+def render_suggestion_buttons(suggestions, key_prefix, n_cols=5):
+    """Render suggestions as clickable buttons laid out in n_cols columns.
+    Returns the clicked suggestion (string) or None.
+    """
+    selected = None
+    if suggestions:
+        cols = st.columns(n_cols)
+        for i, s in enumerate(suggestions):
+            col = cols[i % n_cols]
+            # use a stable unique key per suggestion button
+            if col.button(s, key=f"{key_prefix}_sugg_{i}"):
+                selected = s
+    return selected
+
+
+def favorites_manager(session_key="favorites_list", input_key="fav_input", suggestion_prefix="fav"):
+    """Small UI for building a list of favorite titles.
+    - session_key: session_state key where the favorites list is stored
+    - input_key: session_state key for the free-text input used to search/add
+    Returns the current favorites list.
+    """
+    # ensure state keys exist
+    if session_key not in st.session_state:
+        st.session_state[session_key] = []
+
+    changed_flag = f"{session_key}_changed"
+    if changed_flag not in st.session_state:
+        st.session_state[changed_flag] = False
+
+    clear_flag = f"{input_key}_clear"
+    if clear_flag not in st.session_state:
+        st.session_state[clear_flag] = False
+
+    if input_key not in st.session_state:
+        st.session_state[input_key] = ""
+
+    # if a previous action requested clearing the input, do it before creating widgets
+    if st.session_state.get(clear_flag):
+        st.session_state[input_key] = ""
+        st.session_state[clear_flag] = False
+
+    # Use a single selectbox backed by the full title list (client-side search-as-you-type)
+    all_titles = st.session_state.get("all_titles", [])
+    options = [""] + all_titles if all_titles else [""]
+    sel = st.selectbox("Add favorite (type to filter and pick)", options=options, index=0, key=f"{suggestion_prefix}_global_select")
+    if sel:
+        if sel not in st.session_state[session_key]:
+            st.session_state[session_key].append(sel)
+            st.session_state[changed_flag] = True
+
+    # allow adding the typed value explicitly (schedule clear for next run)
+    if st.button("Add typed", key=f"{input_key}_add_typed"):
+        typed = st.session_state.get(input_key, "").strip()
+        if typed and typed not in st.session_state[session_key]:
+            st.session_state[session_key].append(typed)
+            st.session_state[changed_flag] = True
+
+    # display current favorites with remove buttons
+    if st.session_state[session_key]:
+        st.write("Current favorites:")
+        for i, s in enumerate(list(st.session_state[session_key])):
+            c1, c2 = st.columns([8, 1])
+            c1.write(s)
+            if c2.button("Remove", key=f"{session_key}_remove_{i}"):
+                st.session_state[session_key].pop(i)
+                st.session_state[changed_flag] = True
+
+    return st.session_state[session_key]
+
+
 def render_items(items: list[dict], strategy: str, mode: str, user_input: str) -> None:
     st.subheader(strategy)
     if not items:
@@ -90,7 +160,7 @@ def render_items(items: list[dict], strategy: str, mode: str, user_input: str) -
                     },
                 )
                 st.success("Feedback saved.")
-            if cols[1].button("Not useful", key=f"n_{i}_{row['title']}"):
+    if cols[1].button("Not useful", key=f"n_{i}_{row['title']}"):
                 api_post(
                     "/feedback",
                     {
@@ -101,6 +171,19 @@ def render_items(items: list[dict], strategy: str, mode: str, user_input: str) -
                     },
                 )
                 st.success("Feedback saved.")
+
+
+def run_recommendation(payload: dict, user_input: str) -> None:
+    """Call the recommendation API and store the result in session_state.
+    This centralizes the behaviour used by both the Generate button and automatic triggers.
+    """
+    try:
+        result = api_post("/recommend", payload)
+        st.session_state.last_result = result
+        st.session_state.last_payload = payload.copy()
+        st.session_state.last_user_input = user_input
+    except Exception as e:
+        st.error(f"Recommendation failed: {e}")
 
 
 st.title("📚 Goodbooks Recommender")
@@ -165,6 +248,17 @@ except Exception as e:
     )
     st.stop()
 
+# Load all titles once for client-side selectboxes (search-as-you-type). Stored in session_state to avoid repeated fetches.
+if "all_titles" not in st.session_state:
+    try:
+        limit = int(info.get("books", 10000)) if info.get("books") else 10000
+    except Exception:
+        limit = 10000
+    try:
+        st.session_state["all_titles"] = api_get("/titles", q="", limit=limit).get("titles", [])
+    except Exception:
+        st.session_state["all_titles"] = []
+
 tabs = st.tabs(["Recommend", "Model & Evaluation", "Risk Assessment", "Manuals"])
 
 with tabs[0]:
@@ -188,11 +282,31 @@ with tabs[0]:
     user_input = ""
 
     if mode_label == "Similar books by title":
-        q = st.text_input("Search title", value="")
-        suggestions = api_get("/titles", q=q, limit=30)["titles"]
-        title = st.selectbox("Book title", suggestions or [q])
-        payload.update({"mode": "title", "title": title})
-        user_input = title
+        # Single unified title input: type to search, or pick a suggestion from an inline dropdown
+        # Keep the typed value in session_state under 'title_input'
+        if "title_input" not in st.session_state:
+            st.session_state["title_input"] = ""
+
+        # process a previous selection from the suggestion selectbox before creating widgets
+        title_select_key = "title_select"
+        if st.session_state.get(title_select_key):
+            sel_prev = st.session_state.get(title_select_key)
+            # set the typed input to the selected value (safe to set before widget creation)
+            st.session_state["title_input"] = sel_prev
+            # clear the select state so it won't be reprocessed
+            st.session_state[title_select_key] = ""
+
+        # Use a single selectbox backed by the full title list (client-side search-as-you-type)
+        all_titles = st.session_state.get("all_titles", [])
+        options = [""] + all_titles if all_titles else [""]
+        sel = st.selectbox("Book title (type to filter)", options=options, index=0, key="title_select")
+        if sel:
+            payload.update({"mode": "title", "title": sel})
+            user_input = sel
+            run_recommendation(payload, user_input)
+        else:
+            payload.update({"mode": "title", "title": ""})
+            user_input = ""
     elif mode_label == "Cold start: top-rated books":
         st.info(
             "No user history is needed. The app ranks books by average_rating because the current export has no real ratings_count column."
@@ -200,35 +314,43 @@ with tabs[0]:
         payload.update({"mode": "global"})
         user_input = "top-rated"
     elif mode_label == "Cold start: top-rated by tag":
-        genre = st.text_input("Tag/genre", value="fantasy")
-        payload.update({"mode": "genre", "genre": genre})
-        user_input = genre
+        # empty by default for better UX
+        genre = st.text_input("Tag/genre", value="", placeholder="e.g. fantasy")
+        payload.update({"mode": "genre", "genre": genre.strip()})
+        user_input = genre.strip()
     elif mode_label == "User profile from favorite books":
-        q = st.text_input("Filter favorite-book list", value="")
-        suggestions = api_get("/titles", q=q, limit=30)["titles"]
-        favs = st.multiselect(
-            "Favorite books",
-            suggestions,
-            default=suggestions[:3] if len(suggestions) >= 3 else suggestions,
-        )
+        # Use a small favorites manager UI so user can build a list interactively
+        st.write("Build your list of favorite books (click suggestions to add)")
+        favs = favorites_manager(session_key="profile_favs", input_key="profile_fav_input", suggestion_prefix="profile")
         payload.update({"mode": "profile", "favorite_titles": favs})
         user_input = "; ".join(favs)
+        # auto-recompute when favorites changed interactively
+        if st.session_state.get("profile_favs_changed"):
+            st.session_state["profile_favs_changed"] = False
+            run_recommendation(payload, user_input)
     else:
+        st.write("Smart mode: leave empty for top-rated, type a tag, exact title for similar books, or build a favorites profile")
         auto_text = st.text_input(
-            "Input: empty = top-rated, short text = tag, exact title = similar books, or use profile below",
-            value="",
+            "Smart input (type or pick a suggestion)", value="", placeholder=""
         )
-        use_profile = st.toggle("Use selected favorites as list input")
-        if use_profile:
-            suggestions = api_get("/titles", q="", limit=10)["titles"]
-            favs = st.multiselect(
-                "Favorite books", suggestions, default=suggestions[:3]
-            )
+
+        # favourites manager for smart mode
+        favs = favorites_manager(session_key="auto_favs", input_key="auto_fav_input", suggestion_prefix="auto")
+
+        # prefer favorites if any were added, otherwise use typed text
+        if favs:
             payload.update({"mode": "auto", "favorite_titles": favs})
             user_input = "; ".join(favs)
+            if st.session_state.get("auto_favs_changed"):
+                st.session_state["auto_favs_changed"] = False
+                run_recommendation(payload, user_input)
         else:
-            payload.update({"mode": "auto", "title": auto_text})
-            user_input = auto_text
+            payload.update({"mode": "auto", "title": auto_text.strip()})
+            user_input = auto_text.strip()
+            # if user typed a title and it matches a suggestion, we could auto-run
+            if user_input:
+                # do not auto-run on every keystroke; rely on explicit Generate for typed text
+                pass
 
     if "last_result" not in st.session_state:
         st.session_state.last_result = None
@@ -240,15 +362,7 @@ with tabs[0]:
         st.session_state.last_user_input = ""
 
     if st.button("Generate recommendations", type="primary"):
-        try:
-            result = api_post("/recommend", payload)
-
-            st.session_state.last_result = result
-            st.session_state.last_payload = payload.copy()
-            st.session_state.last_user_input = user_input
-
-        except Exception as e:
-            st.error(f"Recommendation failed: {e}")
+        run_recommendation(payload, user_input)
 
     if st.session_state.last_result is not None:
         render_items(
