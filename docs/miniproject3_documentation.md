@@ -19,7 +19,6 @@ The backend expects:
 
 ```text
 data/books_model.csv
-models/cosine_sim_best.npy
 results/experiment_results.csv
 ```
 
@@ -29,11 +28,8 @@ Required `books_model.csv` columns:
 record_id, goodreads_book_id, title, authors, average_rating, tags_string
 ```
 
-The precomputed cosine matrix must match the CSV row order and have shape:
-
-```text
-(len(books_model), len(books_model))
-```
+The cosine similarity matrix is generated at API startup from the active CSV so
+no precomputed matrix file is required.
 
 ## 4. Recommender model
 

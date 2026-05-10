@@ -8,22 +8,21 @@ This project deploys the Mini-project 1 Goodbooks recommender as a small product
 - model/evaluation/risk-assessment pages
 - feedback collection for future reranking
 
-The active deployed model is **not the old collaborative-filtering template**. The running Docker app uses:
+The running Docker app uses a content-based pipeline built from the provided CSV. The cosine similarity matrix is computed at startup from the active CSV:
 
 ```text
 cleaned Goodreads tag profile (`tags_string`)
 → TF-IDF vectors with max_features=5000
-→ cosine similarity between books
+→ cosine similarity between books (computed at startup)
 → optional reranking with normalized average_rating
 ```
 
 ## Active model artifacts
 
-For the real 10k-book run, place these files before starting Docker:
+For the real 10k-book run, ensure the dataset CSV is present before starting Docker. The cosine similarity matrix will be computed automatically on startup and does not need to be provided as a precomputed file.
 
 ```text
 data/books_model.csv
-models/cosine_sim_best.npy
 results/experiment_results.csv
 ```
 
@@ -35,22 +34,10 @@ record_id, goodreads_book_id, title, authors, average_rating, tags_string
 
 The current full export contains `average_rating` but not a reliable `ratings_count`, so the app labels cold-start results as **top-rated**, not popularity-based.
 
-The cosine matrix must be generated from the same CSV in the same row order:
-
-```text
-cosine_sim_best.npy.shape == (len(books_model.csv), len(books_model.csv))
-```
-
-Check after startup:
+The cosine similarity matrix is generated from the active CSV at container startup. Check model status after startup with:
 
 ```bash
 curl http://localhost:8000/model-info
-```
-
-Expected value when the precomputed matrix is loaded:
-
-```json
-"cosine_sim_loaded_from_file": true
 ```
 
 ## Run
@@ -66,7 +53,7 @@ Open:
 - API docs: <http://localhost:8000/docs>
 - Health check: <http://localhost:8000/health>
 
-Large model files are excluded from Docker build context by `.dockerignore` and mounted at runtime through Docker Compose volumes.
+Large model files are excluded from Docker build context by `.dockerignore`.
 
 ## Recommendation modes
 
@@ -129,7 +116,7 @@ This version is presentation-ready for the first deployed model:
 TF-IDF + cosine similarity + optional average-rating reranking
 ```
 
-Legacy generated files from the earlier collaborative-filtering template are left in the repository for now, but the active Docker deployment uses only:
+The active Docker deployment uses only the essential content-based components:
 
 ```text
 backend/app/main.py
@@ -137,6 +124,5 @@ backend/app/recommender.py
 frontend/streamlit_app.py
 docker-compose.yml
 data/books_model.csv
-models/cosine_sim_best.npy
 results/experiment_results.csv
 ```

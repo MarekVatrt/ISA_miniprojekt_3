@@ -7,13 +7,9 @@
 
 ## Required runtime artifacts
 
-The project includes `data/books_model.csv`. For the fastest presentation run, also place the precomputed matrix here:
-
-```text
-models/cosine_sim_best.npy
-```
-
-The matrix is not included in the ZIP because it is large. It must match the row order of `data/books_model.csv`.
+The project includes `data/books_model.csv`. The cosine similarity matrix is
+computed automatically at container startup from the active CSV; no precomputed
+matrix file is required.
 
 ## Start
 
@@ -34,11 +30,8 @@ Open:
 curl http://localhost:8000/model-info
 ```
 
-Expected when `models/cosine_sim_best.npy` is present and compatible:
-
-```json
-"cosine_sim_loaded_from_file": true
-```
+The `/model-info` endpoint shows whether the model is ready and provides
+details such as TF-IDF shape and number of books.
 
 ## Stop
 

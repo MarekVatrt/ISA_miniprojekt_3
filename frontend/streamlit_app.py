@@ -7,6 +7,10 @@ import pandas as pd
 import plotly.express as px
 import requests
 import streamlit as st
+from components.visualizations import (
+    plot_similarity_distribution,
+    plot_rating_vs_similarity,
+)
 
 API_URL = os.environ.get("API_URL", "http://localhost:8000")
 st.set_page_config(
@@ -46,6 +50,21 @@ def render_items(items: list[dict], strategy: str, mode: str, user_input: str) -
     }
     visible_df = visible_df.rename(columns=rename_map)
     st.dataframe(visible_df, use_container_width=True, hide_index=True)
+
+    # Visualizations for the recommendation set - show side-by-side
+    c1, c2 = st.columns([1, 1])
+    with c1:
+        try:
+            fig1 = plot_similarity_distribution(df)
+            st.plotly_chart(fig1, use_container_width=True)
+        except Exception as e:
+            st.info(f"Similarity histogram not available: {e}")
+    with c2:
+        try:
+            fig2 = plot_rating_vs_similarity(df)
+            st.plotly_chart(fig2, use_container_width=True)
+        except Exception as e:
+            st.info(f"Rating vs similarity plot not available: {e}")
 
     for i, row in df.iterrows():
         with st.expander(f"#{i + 1}: {row['title']} — {row.get('authors', 'unknown')}"):
@@ -108,11 +127,15 @@ with st.sidebar:
             help="Rating weight is automatically computed as 1 - content weight to avoid invalid weight combinations.",
         )
         rating_w = round(1.0 - sim_w, 4)
-        st.caption(f"Effective formula: {sim_w:.2f} × similarity + {rating_w:.2f} × normalized average_rating")
+        st.caption(
+            f"Effective formula: {sim_w:.2f} × similarity + {rating_w:.2f} × normalized average_rating"
+        )
     else:
         sim_w = 1.0
         rating_w = 0.0
-        st.caption("Pure cosine similarity for title/profile modes; cold-start modes use average_rating.")
+        st.caption(
+            "Pure cosine similarity for title/profile modes; cold-start modes use average_rating."
+        )
 
     st.divider()
     st.header("Upload books CSV")
@@ -120,8 +143,7 @@ with st.sidebar:
         "books_model.csv",
         type=["csv"],
         help=(
-            "Required columns: record_id, goodreads_book_id, title, authors, average_rating, tags_string. "
-            "ratings_count is optional. If you use a precomputed cosine matrix, the CSV row order must match it."
+            "CSV must contain: record_id, goodreads_book_id, title, authors, average_rating, tags_string."
         ),
     )
     if uploaded and st.button("Activate uploaded CSV"):
@@ -166,13 +188,15 @@ with tabs[0]:
     user_input = ""
 
     if mode_label == "Similar books by title":
-        q = st.text_input("Search title", value="Harry Potter")
+        q = st.text_input("Search title", value="")
         suggestions = api_get("/titles", q=q, limit=30)["titles"]
         title = st.selectbox("Book title", suggestions or [q])
         payload.update({"mode": "title", "title": title})
         user_input = title
     elif mode_label == "Cold start: top-rated books":
-        st.info("No user history is needed. The app ranks books by average_rating because the current export has no real ratings_count column.")
+        st.info(
+            "No user history is needed. The app ranks books by average_rating because the current export has no real ratings_count column."
+        )
         payload.update({"mode": "global"})
         user_input = "top-rated"
     elif mode_label == "Cold start: top-rated by tag":
@@ -180,7 +204,7 @@ with tabs[0]:
         payload.update({"mode": "genre", "genre": genre})
         user_input = genre
     elif mode_label == "User profile from favorite books":
-        q = st.text_input("Filter favorite-book list", value="Harry Potter")
+        q = st.text_input("Filter favorite-book list", value="")
         suggestions = api_get("/titles", q=q, limit=30)["titles"]
         favs = st.multiselect(
             "Favorite books",
@@ -192,12 +216,14 @@ with tabs[0]:
     else:
         auto_text = st.text_input(
             "Input: empty = top-rated, short text = tag, exact title = similar books, or use profile below",
-            value="The Hunger Games (The Hunger Games, #1)",
+            value="",
         )
         use_profile = st.toggle("Use selected favorites as list input")
         if use_profile:
-            suggestions = api_get("/titles", q="Harry Potter", limit=10)["titles"]
-            favs = st.multiselect("Favorite books", suggestions, default=suggestions[:3])
+            suggestions = api_get("/titles", q="", limit=10)["titles"]
+            favs = st.multiselect(
+                "Favorite books", suggestions, default=suggestions[:3]
+            )
             payload.update({"mode": "auto", "favorite_titles": favs})
             user_input = "; ".join(favs)
         else:
@@ -229,7 +255,7 @@ with tabs[0]:
             st.session_state.last_result["items"],
             st.session_state.last_result["strategy"],
             st.session_state.last_payload["mode"],
-            st.session_state.last_user_input
+            st.session_state.last_user_input,
         )
 
 with tabs[1]:
@@ -239,13 +265,21 @@ with tabs[1]:
     c2.metric("TF‑IDF rows", info["tfidf_shape"][0])
     c3.metric("TF‑IDF features", info["tfidf_shape"][1])
     if info.get("cosine_sim_loaded_from_file"):
-        st.success("Precomputed cosine_sim_best.npy is loaded from models/.")
+        st.success("Precomputed cosine_sim matrix was loaded from file.")
     else:
-        st.warning("cosine_sim_best.npy was not loaded; the API computed cosine similarity at startup.")
+        build_time = info.get("model_build_time_seconds")
+        if build_time:
+            st.success(f"Cosine similarity matrix computed at startup in {build_time:.1f}s.")
+        else:
+            st.info("Cosine similarity matrix will be computed by the API on startup.")
     if info.get("has_ratings_count"):
-        st.info("The active CSV contains ratings_count. The UI displays it, but current cold-start ranking still uses average_rating for clarity.")
+        st.info(
+            "The active CSV contains ratings_count. The UI displays it, but current cold-start ranking still uses average_rating for clarity."
+        )
     else:
-        st.info("The active CSV has no ratings_count, so cold-start ranking is top-rated by average_rating, not popularity-based.")
+        st.info(
+            "The active CSV has no ratings_count, so cold-start ranking is top-rated by average_rating, not popularity-based."
+        )
     st.json({k: v for k, v in info.items() if k not in {"best_experiment"}})
 
     st.subheader("Benchmark from Mini-project 1 notebook")
@@ -325,10 +359,12 @@ with tabs[2]:
 
 with tabs[3]:
     st.header("Installation manual")
-    st.markdown("" \
-    "1. Docker desktop is installed and running" \
-    "2. Open terminal in the project folder and run:"
-    "")
+    st.markdown(
+        ""
+        "1. Docker desktop is installed and running"
+        "2. Open terminal in the project folder and run:"
+        ""
+    )
     st.code("docker compose up --build", language="bash")
     st.write("Open GUI at http://localhost:8501 and API docs at http://localhost:8000/docs.")
     st.header("User manual")
@@ -340,6 +376,6 @@ with tabs[3]:
         4. Optionally enable average-rating reranking and choose the content-similarity weight.
         5. Click **Generate recommendations**.
         6. Mark recommendations as useful/not useful to collect feedback.
-        7. Use `/model-info` or the Model tab to verify that `cosine_sim_best.npy` is loaded.
+        7. Use `/model-info` or the Model tab to verify that the model is ready.
         """
     )

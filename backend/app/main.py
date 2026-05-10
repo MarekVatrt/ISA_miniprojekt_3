@@ -16,7 +16,9 @@ BOOKS_MODEL_PATH = os.environ.get(
 EXPERIMENTS_PATH = os.environ.get(
     "EXPERIMENTS_PATH", "/app/results/experiment_results.csv"
 )
-COSINE_SIM_PATH = os.environ.get("COSINE_SIM_PATH", "/app/models/cosine_sim_best.npy")
+# Do not rely on a precomputed .npy file in the repository. Default to None so the
+# recommender builds the TF-IDF and cosine-similarity matrix at startup.
+COSINE_SIM_PATH = os.environ.get("COSINE_SIM_PATH", None)
 ACTIVE_UPLOAD_PATH = "/app/data/uploaded_books_model.csv"
 
 app = FastAPI(
@@ -33,7 +35,10 @@ class RecommendRequest(BaseModel):
     genre: str | None = None
     favorite_titles: list[str] = []
     n: int = Field(10, ge=1, le=30)
-    hybrid: bool = Field(True, description="For similarity modes, rerank by cosine similarity + normalized average_rating")
+    hybrid: bool = Field(
+        True,
+        description="For similarity modes, rerank by cosine similarity + normalized average_rating",
+    )
     similarity_weight: float = Field(0.8, ge=0, le=1)
     rating_weight: float = Field(0.2, ge=0, le=1)
 
