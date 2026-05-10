@@ -186,6 +186,27 @@ def run_recommendation(payload: dict, user_input: str) -> None:
         st.error(f"Recommendation failed: {e}")
 
 
+def _on_title_select():
+    # record selection so main flow can handle it after widgets are created
+    st.session_state["title_selected"] = st.session_state.get("title_select", "")
+
+
+# Title select callback removed: we now run recompute immediately after selection.
+
+
+def _on_global_select(session_key: str, select_key: str):
+    """Callback for global selectboxes used to add favorites.
+    Appends the selected item to the favorites list and clears the selectbox.
+    """
+    sel = st.session_state.get(select_key, "")
+    if sel:
+        if sel not in st.session_state[session_key]:
+            st.session_state[session_key].append(sel)
+            st.session_state[f"{session_key}_changed"] = True
+        # reset the selectbox so it doesn't keep the selection
+        st.session_state[select_key] = ""
+
+
 st.title("📚 Goodbooks Recommender")
 st.caption(
     "Active model: cleaned book tag profiles → TF‑IDF max_features=5000 → cosine similarity. "
@@ -287,23 +308,22 @@ with tabs[0]:
         if "title_input" not in st.session_state:
             st.session_state["title_input"] = ""
 
-        # process a previous selection from the suggestion selectbox before creating widgets
-        title_select_key = "title_select"
-        if st.session_state.get(title_select_key):
-            sel_prev = st.session_state.get(title_select_key)
-            # set the typed input to the selected value (safe to set before widget creation)
-            st.session_state["title_input"] = sel_prev
-            # clear the select state so it won't be reprocessed
-            st.session_state[title_select_key] = ""
+        # (no pre-processing here; selection handled by on_change callback)
 
         # Use a single selectbox backed by the full title list (client-side search-as-you-type)
         all_titles = st.session_state.get("all_titles", [])
         options = [""] + all_titles if all_titles else [""]
-        sel = st.selectbox("Book title (type to filter)", options=options, index=0, key="title_select")
-        if sel:
-            payload.update({"mode": "title", "title": sel})
-            user_input = sel
-            run_recommendation(payload, user_input)
+        # create the selectbox and run recommendation when user picks a value
+        sel = st.selectbox("Book title (type to filter)", options=options, index=0, key="title_select", on_change=_on_title_select)
+        # if a selection was recorded by the on_change callback, act on it
+        if st.session_state.get("title_selected"):
+            sel = st.session_state.pop("title_selected")
+            last_sel = st.session_state.get("last_title_selected", "")
+            if sel != last_sel:
+                st.session_state["last_title_selected"] = sel
+                payload.update({"mode": "title", "title": sel})
+                user_input = sel
+                run_recommendation(payload, user_input)
         else:
             payload.update({"mode": "title", "title": ""})
             user_input = ""
@@ -324,10 +344,6 @@ with tabs[0]:
         favs = favorites_manager(session_key="profile_favs", input_key="profile_fav_input", suggestion_prefix="profile")
         payload.update({"mode": "profile", "favorite_titles": favs})
         user_input = "; ".join(favs)
-        # auto-recompute when favorites changed interactively
-        if st.session_state.get("profile_favs_changed"):
-            st.session_state["profile_favs_changed"] = False
-            run_recommendation(payload, user_input)
     else:
         st.write("Smart mode: leave empty for top-rated, type a tag, exact title for similar books, or build a favorites profile")
         auto_text = st.text_input(
@@ -341,9 +357,7 @@ with tabs[0]:
         if favs:
             payload.update({"mode": "auto", "favorite_titles": favs})
             user_input = "; ".join(favs)
-            if st.session_state.get("auto_favs_changed"):
-                st.session_state["auto_favs_changed"] = False
-                run_recommendation(payload, user_input)
+            # auto recompute will be handled centrally after inputs are rendered
         else:
             payload.update({"mode": "auto", "title": auto_text.strip()})
             user_input = auto_text.strip()
@@ -362,6 +376,25 @@ with tabs[0]:
         st.session_state.last_user_input = ""
 
     if st.button("Generate recommendations", type="primary"):
+        run_recommendation(payload, user_input)
+
+    # Centralized auto-run triggers (handle after inputs are displayed):
+    # - if user picked a title via title_select, stored in session_state['auto_run_title']
+    # - if favorites list changed, session_state contains <session_key>_changed flags
+    if st.session_state.get("auto_run_title"):
+        sel = st.session_state.pop("auto_run_title")
+        # payload already set above for title mode, but rebuild to be safe
+        payload.update({"mode": "title", "title": sel})
+        run_recommendation(payload, sel)
+
+    # profile autos
+    if st.session_state.get("profile_favs_changed"):
+        st.session_state["profile_favs_changed"] = False
+        run_recommendation(payload, user_input)
+
+    # auto_favs (from smart mode)
+    if st.session_state.get("auto_favs_changed"):
+        st.session_state["auto_favs_changed"] = False
         run_recommendation(payload, user_input)
 
     if st.session_state.last_result is not None:
