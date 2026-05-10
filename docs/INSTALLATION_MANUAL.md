@@ -2,34 +2,46 @@
 
 ## Requirements
 
-- Docker
+- Docker Desktop or Docker Engine
 - Docker Compose
 
-## Steps
+## Required runtime artifacts
+
+The project includes `data/books_model.csv`. For the fastest presentation run, also place the precomputed matrix here:
+
+```text
+models/cosine_sim_best.npy
+```
+
+The matrix is not included in the ZIP because it is large. It must match the row order of `data/books_model.csv`.
+
+## Start
 
 ```bash
-unzip miniproject3_content_based_goodbooks.zip
-cd miniproject3_content_based_goodbooks
+docker compose down
 docker compose up --build
 ```
 
-## Open the app
+Open:
 
-- Streamlit GUI: http://localhost:8501
-- FastAPI documentation: http://localhost:8000/docs
+- GUI: `http://localhost:8501`
+- API docs: `http://localhost:8000/docs`
+- Model info: `http://localhost:8000/model-info`
 
-## Stop the app
+## Verify model loading
+
+```bash
+curl http://localhost:8000/model-info
+```
+
+Expected when `models/cosine_sim_best.npy` is present and compatible:
+
+```json
+"cosine_sim_loaded_from_file": true
+```
+
+## Stop
 
 ```bash
 docker compose down
 ```
-
-## Use full Mini-project 1 output
-
-Upload your full `books_model.csv` in the GUI sidebar or replace:
-
-```text
-data/sample/books_model.csv
-```
-
-The API rebuilds the TF-IDF matrix and cosine similarity matrix after upload.

@@ -21,7 +21,7 @@ ACTIVE_UPLOAD_PATH = "/app/data/uploaded_books_model.csv"
 
 app = FastAPI(
     title="Mini-project 3: Goodbooks Content-Based Recommender",
-    description="Production deployment of Mini-project 1: TF-IDF over cleaned book tags + cosine similarity.",
+    description="Production deployment of Mini-project 1: TF-IDF over cleaned book tags + cosine similarity with optional average-rating reranking.",
     version="1.0.0",
 )
 model = ContentBasedBookRecommender(BOOKS_MODEL_PATH, EXPERIMENTS_PATH, COSINE_SIM_PATH)
@@ -33,7 +33,7 @@ class RecommendRequest(BaseModel):
     genre: str | None = None
     favorite_titles: list[str] = []
     n: int = Field(10, ge=1, le=30)
-    hybrid: bool = True
+    hybrid: bool = Field(True, description="For similarity modes, rerank by cosine similarity + normalized average_rating")
     similarity_weight: float = Field(0.8, ge=0, le=1)
     rating_weight: float = Field(0.2, ge=0, le=1)
 
@@ -77,15 +77,15 @@ def recommend(req: RecommendRequest) -> dict[str, Any]:
 
     if req.mode == "global":
         return {
-            "strategy": "Cold Start Level 1: Global popularity",
-            "items": model.global_popular(req.n, req.hybrid, sw, rw),
+            "strategy": "Cold start: top-rated books",
+            "items": model.global_top_rated(req.n),
         }
     if req.mode == "genre":
         if not req.genre:
             raise HTTPException(400, "genre is required")
         return {
-            "strategy": f"Cold Start Level 2: Genre popularity for '{req.genre}'",
-            "items": model.genre_popular(req.genre, req.n, req.hybrid, sw, rw),
+            "strategy": f"Cold start: top-rated books for tag '{req.genre}'",
+            "items": model.genre_top_rated(req.genre, req.n),
         }
     if req.mode == "profile":
         if not req.favorite_titles:

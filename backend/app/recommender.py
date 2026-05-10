@@ -27,12 +27,26 @@ def _safe_contains(series: pd.Series, text: str) -> pd.Series:
     return series.fillna("").str.lower().str.contains(pattern, regex=True)
 
 
-class ContentBasedBookRecommender:
-    """Deployment version of Mini-project 1: Goodbooks tag-based content recommender.
+def _normalize_weights(similarity_weight: float, rating_weight: float) -> tuple[float, float]:
+    """Normalize weights so UI edge cases like 1.0 + 1.0 behave as 50/50."""
+    sw = max(float(similarity_weight), 0.0)
+    rw = max(float(rating_weight), 0.0)
+    total = sw + rw
+    if total <= 0:
+        return 1.0, 0.0
+    return sw / total, rw / total
 
-    Model: TF-IDF over cleaned ``tags_string`` profiles, max_features=5000
-    (the best MP1 experiment), cosine similarity, optional 80/20 hybrid score
-    combining similarity and normalized average rating.
+
+class ContentBasedBookRecommender:
+    """Deployment version of the Mini-project 1 Goodbooks content recommender.
+
+    Core model:
+    cleaned ``tags_string`` profiles -> TF-IDF with max_features=5000 -> cosine similarity.
+
+    Optional reranking:
+    similarity score can be blended with normalized ``average_rating``. The current
+    full export does not contain a real ``ratings_count`` column, so cold-start
+    recommendations are intentionally labelled as *top-rated*, not popularity-based.
     """
 
     def __init__(
@@ -51,6 +65,9 @@ class ContentBasedBookRecommender:
         self.indices: pd.Series | None = None
         self.experiments_df = pd.DataFrame()
         self.cosine_sim_loaded_from_file = False
+        self.has_ratings_count = False
+        self.rating_min = 0.0
+        self.rating_max = 5.0
         self.load()
 
     def load(self) -> None:
@@ -58,54 +75,67 @@ class ContentBasedBookRecommender:
         missing = REQUIRED_COLUMNS - set(self.books_df.columns)
         if missing:
             raise ValueError(f"books_model.csv is missing columns: {sorted(missing)}")
-        self.books_df["tags_string"] = (
-            self.books_df["tags_string"].fillna("").astype(str)
-        )
+
+        self.books_df["tags_string"] = self.books_df["tags_string"].fillna("").astype(str)
         self.books_df["authors"] = self.books_df["authors"].fillna("unknown")
         self.books_df["average_rating"] = pd.to_numeric(
             self.books_df["average_rating"], errors="coerce"
-        ).fillna(0)
-        if "ratings_count" not in self.books_df.columns:
-            self.books_df["ratings_count"] = 1
-        self.books_df["ratings_count"] = pd.to_numeric(
-            self.books_df["ratings_count"], errors="coerce"
-        ).fillna(1)
-        if "popularity_score" not in self.books_df.columns:
-            # Approximation compatible with the notebook's popularity usage: rating * log(1 + count).
-            self.books_df["popularity_score"] = self.books_df[
-                "average_rating"
-            ] * np.log1p(self.books_df["ratings_count"])
+        ).fillna(0.0)
+
+        # Do not create fake ratings_count=1. If the exported dataset has no count,
+        # we use average_rating only and label the fallback as top-rated.
+        self.has_ratings_count = "ratings_count" in self.books_df.columns
+        if self.has_ratings_count:
+            self.books_df["ratings_count"] = pd.to_numeric(
+                self.books_df["ratings_count"], errors="coerce"
+            ).fillna(0).astype(int)
+
+        self.rating_min = float(self.books_df["average_rating"].min())
+        self.rating_max = float(self.books_df["average_rating"].max())
+        self.books_df["normalized_average_rating"] = self._normalize_rating_series(
+            self.books_df["average_rating"]
+        )
+        # This is the score used for cold-start ranking in the current project export.
+        self.books_df["top_rated_score"] = self.books_df["average_rating"]
 
         self.tfidf = TfidfVectorizer(stop_words="english", max_features=5000)
         self.tfidf_matrix = self.tfidf.fit_transform(self.books_df["tags_string"])
-        self.indices = pd.Series(self.books_df.index, index=self.books_df["title"])
+        # Keep the first occurrence of duplicate titles for deterministic lookup.
+        self.indices = pd.Series(self.books_df.index, index=self.books_df["title"]).drop_duplicates(
+            keep="first"
+        )
 
         n_books = len(self.books_df)
         loaded_from_file = False
 
         if self.cosine_sim_path and os.path.exists(self.cosine_sim_path):
             try:
-                precomputed = np.load(self.cosine_sim_path)
+                precomputed = np.load(self.cosine_sim_path, mmap_mode="r")
                 if precomputed.shape == (n_books, n_books):
                     self.cosine_sim = precomputed
                     loaded_from_file = True
+                    self.cosine_sim_loaded_from_file = True
                     print(
-                        f"[Recommender] Loaded precomputed cosine similarity from {self.cosine_sim_path} ({precomputed.shape})"
+                        f"[Recommender] Loaded precomputed cosine similarity from {self.cosine_sim_path} ({precomputed.shape})",
+                        flush=True,
                     )
                 else:
                     print(
-                        f"[Recommender] Precomputed matrix shape {precomputed.shape} does not match {n_books} books, recomputing..."
+                        f"[Recommender] Precomputed matrix shape {precomputed.shape} does not match {n_books} books, recomputing...",
+                        flush=True,
                     )
-            except Exception as e:
+            except Exception as exc:
                 print(
-                    f"[Recommender] Failed to load precomputed cosine similarity: {e}, recomputing..."
+                    f"[Recommender] Failed to load precomputed cosine similarity: {exc}, recomputing...",
+                    flush=True,
                 )
 
         if not loaded_from_file:
             self.cosine_sim = cosine_similarity(self.tfidf_matrix, self.tfidf_matrix)
             self.cosine_sim_loaded_from_file = False
             print(
-                f"[Recommender] Computed cosine similarity matrix ({self.cosine_sim.shape})"
+                f"[Recommender] Computed cosine similarity matrix ({self.cosine_sim.shape})",
+                flush=True,
             )
 
         if self.experiments_path and os.path.exists(self.experiments_path):
@@ -126,58 +156,62 @@ class ContentBasedBookRecommender:
             "features": "cleaned tags_string",
             "vectorizer": "TfidfVectorizer(stop_words='english', max_features=5000)",
             "similarity": "cosine_similarity",
+            "reranking": "optional weighted blend of cosine similarity and normalized average_rating",
+            "cold_start": "top-rated fallback based on average_rating",
             "books": int(len(self.books_df)),
             "tfidf_shape": list(self.tfidf_matrix.shape),
+            "has_ratings_count": bool(self.has_ratings_count),
             "best_experiment": best,
             "source": "Mini-project 1 notebooks: preprocessing + recsys",
+            "books_path": self.books_path,
+            "cosine_sim_path": self.cosine_sim_path,
             "cosine_sim_loaded_from_file": self.cosine_sim_loaded_from_file,
         }
 
-    def _normalize_ratings(self, df: pd.DataFrame) -> pd.Series:
-        min_r = df["average_rating"].min()
-        max_r = df["average_rating"].max()
-        if max_r - min_r == 0:
-            return pd.Series([0.5] * len(df), index=df.index)
-        return (df["average_rating"] - min_r) / (max_r - min_r)
+    def _normalize_rating_series(self, ratings: pd.Series) -> pd.Series:
+        if self.rating_max - self.rating_min == 0:
+            return pd.Series([0.5] * len(ratings), index=ratings.index)
+        return (ratings - self.rating_min) / (self.rating_max - self.rating_min)
 
     def _apply_hybrid_score(
         self,
         df: pd.DataFrame,
-        similarity_col: str | None,
+        similarity_col: str,
         similarity_weight: float,
         rating_weight: float,
     ) -> pd.DataFrame:
+        """Rerank similarity candidates with normalized average rating.
+
+        If the UI sends weights 1.0 and 1.0, they are normalized to 0.5 and 0.5.
+        """
         df = df.copy()
-        df["norm_rating"] = self._normalize_ratings(df)
-        if similarity_col and similarity_col in df.columns:
-            df["hybrid_score"] = (
-                similarity_weight * df[similarity_col]
-                + rating_weight * df["norm_rating"]
-            )
-        else:
-            df["hybrid_score"] = df["norm_rating"]
+        sw, rw = _normalize_weights(similarity_weight, rating_weight)
+        df["rating_component"] = self._normalize_rating_series(df["average_rating"])
+        df["hybrid_score"] = sw * df[similarity_col] + rw * df["rating_component"]
         return df.sort_values("hybrid_score", ascending=False).drop(
-            columns=["norm_rating"]
+            columns=["rating_component"]
         )
 
     def _format(self, df: pd.DataFrame, n: int) -> list[dict]:
-        cols = [
-            c
-            for c in [
-                "record_id",
-                "title",
-                "authors",
-                "average_rating",
-                "ratings_count",
-                "popularity_score",
+        base_cols = [
+            "record_id",
+            "title",
+            "authors",
+            "average_rating",
+        ]
+        if self.has_ratings_count and "ratings_count" in df.columns:
+            base_cols.append("ratings_count")
+        base_cols.extend(
+            [
+                "top_rated_score",
                 "similarity",
                 "hybrid_score",
                 "tags_string",
             ]
-            if c in df.columns
-        ]
+        )
+        cols = [c for c in base_cols if c in df.columns]
         out = df[cols].head(n).copy()
-        for col in ["average_rating", "popularity_score", "similarity", "hybrid_score"]:
+        for col in ["average_rating", "top_rated_score", "similarity", "hybrid_score"]:
             if col in out:
                 out[col] = out[col].astype(float).round(4)
         return out.to_dict(orient="records")
@@ -189,6 +223,22 @@ class ContentBasedBookRecommender:
         mask = _safe_contains(self.books_df["title"], query)
         return self.books_df.loc[mask, "title"].head(limit).tolist()
 
+    def global_top_rated(self, n: int = 10) -> list[dict]:
+        assert self.books_df is not None
+        df = self.books_df.sort_values(
+            ["average_rating", "title"], ascending=[False, True]
+        )
+        return self._format(df, n)
+
+    def genre_top_rated(self, genre: str, n: int = 10) -> list[dict]:
+        assert self.books_df is not None
+        df = self.books_df[_safe_contains(self.books_df["tags_string"], genre)]
+        if df.empty:
+            return []
+        df = df.sort_values(["average_rating", "title"], ascending=[False, True])
+        return self._format(df, n)
+
+    # Backward-compatible aliases used by older endpoint code/tests.
     def global_popular(
         self,
         n: int = 10,
@@ -196,11 +246,7 @@ class ContentBasedBookRecommender:
         similarity_weight: float = SIMILARITY_WEIGHT_DEFAULT,
         rating_weight: float = RATING_WEIGHT_DEFAULT,
     ) -> list[dict]:
-        assert self.books_df is not None
-        df = self.books_df.nlargest(max(n, 1) * 3, "popularity_score")
-        if hybrid:
-            df = self._apply_hybrid_score(df, None, similarity_weight, rating_weight)
-        return self._format(df, n)
+        return self.global_top_rated(n)
 
     def genre_popular(
         self,
@@ -210,14 +256,7 @@ class ContentBasedBookRecommender:
         similarity_weight: float = SIMILARITY_WEIGHT_DEFAULT,
         rating_weight: float = RATING_WEIGHT_DEFAULT,
     ) -> list[dict]:
-        assert self.books_df is not None
-        df = self.books_df[_safe_contains(self.books_df["tags_string"], genre)]
-        if df.empty:
-            return []
-        df = df.nlargest(max(n, 1) * 3, "popularity_score")
-        if hybrid:
-            df = self._apply_hybrid_score(df, None, similarity_weight, rating_weight)
-        return self._format(df, n)
+        return self.genre_top_rated(genre, n)
 
     def by_title(
         self,
@@ -234,15 +273,13 @@ class ContentBasedBookRecommender:
         )
         if title not in self.indices:
             return []
-        idx = self.indices[title]
-        if isinstance(idx, pd.Series):
-            idx = idx.iloc[0]
-        sim_scores = sorted(
-            enumerate(self.cosine_sim[idx]), key=lambda x: x[1], reverse=True
-        )[1 : n + 25]
-        book_indices = [i for i, _ in sim_scores]
-        df = self.books_df.iloc[book_indices].copy()
-        df["similarity"] = [s for _, s in sim_scores]
+        idx = int(self.indices[title])
+        scores = np.asarray(self.cosine_sim[idx]).ravel()
+        sim_scores = sorted(enumerate(scores), key=lambda x: x[1], reverse=True)[
+            1 : n + 25
+        ]
+        df = self.books_df.iloc[[i for i, _ in sim_scores]].copy()
+        df["similarity"] = [float(s) for _, s in sim_scores]
         if hybrid:
             df = self._apply_hybrid_score(
                 df, "similarity", similarity_weight, rating_weight
@@ -262,15 +299,13 @@ class ContentBasedBookRecommender:
             and self.indices is not None
             and self.tfidf_matrix is not None
         )
-        valid_indices = []
+        valid_indices: list[int] = []
         for title in favorite_titles:
             if title in self.indices:
-                idx = self.indices[title]
-                valid_indices.append(
-                    int(idx.iloc[0] if isinstance(idx, pd.Series) else idx)
-                )
+                valid_indices.append(int(self.indices[title]))
         if not valid_indices:
             return []
+
         book_vectors = self.tfidf_matrix[valid_indices].toarray()
         user_profile = np.mean(book_vectors, axis=0)
         similarities = cosine_similarity(
@@ -279,7 +314,7 @@ class ContentBasedBookRecommender:
         sim_scores = sorted(enumerate(similarities), key=lambda x: x[1], reverse=True)
         sim_scores = [s for s in sim_scores if s[0] not in valid_indices][: n + 25]
         df = self.books_df.iloc[[i for i, _ in sim_scores]].copy()
-        df["similarity"] = [s for _, s in sim_scores]
+        df["similarity"] = [float(s) for _, s in sim_scores]
         if hybrid:
             df = self._apply_hybrid_score(
                 df, "similarity", similarity_weight, rating_weight
@@ -296,14 +331,12 @@ class ContentBasedBookRecommender:
     ) -> dict:
         if user_input is None or user_input == "":
             return {
-                "strategy": "Cold Start Level 1: Global popularity",
-                "items": self.global_popular(
-                    n, hybrid, similarity_weight, rating_weight
-                ),
+                "strategy": "Cold start: top-rated books",
+                "items": self.global_top_rated(n),
             }
         if isinstance(user_input, list):
             return {
-                "strategy": "User Profile Recommender: average TF-IDF vector of favorite books",
+                "strategy": "User profile recommender: average TF-IDF vector of favorite books",
                 "items": self.user_profile(
                     user_input, n, hybrid, similarity_weight, rating_weight
                 ),
@@ -311,10 +344,8 @@ class ContentBasedBookRecommender:
         words = str(user_input).strip().split()
         if len(words) <= 3:
             return {
-                "strategy": f"Cold Start Level 2: Genre popularity for '{user_input}'",
-                "items": self.genre_popular(
-                    user_input, n, hybrid, similarity_weight, rating_weight
-                ),
+                "strategy": f"Cold start: top-rated books for tag '{user_input}'",
+                "items": self.genre_top_rated(str(user_input), n),
             }
         title_recs = self.by_title(
             str(user_input), n, hybrid, similarity_weight, rating_weight
@@ -325,10 +356,8 @@ class ContentBasedBookRecommender:
                 "items": title_recs,
             }
         return {
-            "strategy": f"Fallback: genre popularity for '{user_input}'",
-            "items": self.genre_popular(
-                str(user_input), n, hybrid, similarity_weight, rating_weight
-            ),
+            "strategy": f"Fallback: top-rated books for tag '{user_input}'",
+            "items": self.genre_top_rated(str(user_input), n),
         }
 
     def save_feedback(

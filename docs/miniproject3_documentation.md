@@ -2,78 +2,103 @@
 
 ## 1. Goal
 
-The goal is to deploy a recommender model developed in Mini-project 1 or Mini-project 2 as an Intelligent System Application. The delivered application contains a GUI, model inference API, evaluation dashboard, risk assessment, Docker deployment, installation manual, and user manual.
+The goal is to deploy the Goodbooks recommender developed in Mini-project 1 as an Intelligent System Application. The delivered application contains a GUI, model inference API, evaluation dashboard, risk assessment, Docker deployment, installation manual, and user manual.
 
 ## 2. Application architecture
 
-The application has two services:
+The active deployment has two services:
 
-1. **FastAPI backend** – loads or trains the recommendation model, exposes endpoints for recommendations, evaluation metrics, risk assessment, feedback collection, and retraining.
-2. **Streamlit GUI** – provides an interactive web interface for users and presentation during the lab session.
+1. **FastAPI backend** – loads the Goodbooks content-based recommender, exposes endpoints for recommendations, model information, experiment metrics, and feedback collection.
+2. **Streamlit GUI** – provides an interactive web interface for recommendations, model inspection, risk assessment, and manuals.
 
-The services are orchestrated by Docker Compose. The API must become healthy before the GUI starts.
+The services are orchestrated by Docker Compose.
 
-## 3. Data pipeline
+## 3. Data and model artifacts
 
-The data pipeline expects interaction data with these required columns:
+The backend expects:
 
-- `user_id`
-- `item_id`
-- `rating`
+```text
+data/books_model.csv
+models/cosine_sim_best.npy
+results/experiment_results.csv
+```
 
-The pipeline performs:
+Required `books_model.csv` columns:
 
-- column normalization and alias handling;
-- removal of rows with missing user/item/rating values;
-- conversion of ratings to numeric values;
-- duplicate user-item aggregation using mean rating;
-- construction of a user-item matrix;
-- item-item similarity calculation;
-- model evaluation and artifact persistence.
+```text
+record_id, goodreads_book_id, title, authors, average_rating, tags_string
+```
+
+The precomputed cosine matrix must match the CSV row order and have shape:
+
+```text
+(len(books_model), len(books_model))
+```
 
 ## 4. Recommender model
 
-The included deployable model is item-based collaborative filtering. It computes item similarity from centered user ratings and predicts a rating for each candidate item using the weighted ratings of similar items previously rated by the selected user. For cold-start situations, it falls back to item mean, user mean, or global mean.
+The active model is content-based filtering:
 
-## 5. GUI functionality
+```text
+cleaned tags_string
+→ TF-IDF vectors, max_features=5000
+→ cosine similarity between books
+```
+
+For title-based recommendations, the selected book is used as the query and the system returns the most similar books. For user-profile recommendations, selected favorite books are averaged into one TF-IDF profile vector.
+
+For similarity-based modes, the app can rerank results by combining cosine similarity with normalized `average_rating`:
+
+```text
+hybrid_score = content_weight × cosine_similarity + rating_weight × normalized_average_rating
+```
+
+The default is `0.8 × similarity + 0.2 × normalized average_rating`.
+
+## 5. Cold-start strategy
+
+The current full export has `average_rating`, but not a reliable `ratings_count`, so the application does not claim true popularity. Cold-start modes are labelled as:
+
+- **top-rated books**
+- **top-rated books by tag**
+
+Both are ranked by `average_rating`.
+
+## 6. GUI functionality
 
 The GUI supports:
 
-- selecting a user;
-- choosing the number of recommendations;
-- including/excluding already seen items;
-- visualizing ranked recommendations;
-- uploading a new CSV dataset and retraining/deploying the model;
-- saving explicit feedback;
-- showing quality metrics;
-- showing risk assessment and improvement proposal;
-- showing installation and user manual directly in the app.
+- title-based similar-book recommendations;
+- top-rated cold start;
+- tag-based top-rated cold start;
+- user-profile recommendations from favorite books;
+- smart mode that selects a strategy automatically;
+- adjustable average-rating reranking for similarity modes;
+- recommendation feedback;
+- model/evaluation dashboard;
+- risk assessment and manuals.
 
-## 6. Quality evaluation
+## 7. Quality evaluation
 
-The app reports:
+The app displays the Mini-project 1 experiment results:
 
-- **RMSE** – rating prediction error;
-- **MAE** – average absolute prediction error;
-- **Precision@10** – share of recommended items matching high-rated items;
-- **Catalog coverage** – share of catalog appearing in recommendations;
-- **Popularity bias** – ratio between the most popular item and average item popularity.
+- Precision@10;
+- Recall@10;
+- F1@10.
 
-## 7. Risk assessment
+The selected deployment experiment is `exp5_maxfeat`, using `TfidfVectorizer(stop_words='english', max_features=5000)` on `tags_string`.
+
+## 8. Risk assessment
 
 Main risks and mitigations:
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| Cold-start users/items | Weak recommendations for new users/items | onboarding preferences, metadata fallback, popularity fallback |
-| Popularity bias | Over-recommends popular items | diversity-aware ranking, long-tail monitoring |
-| Privacy | Interaction logs reveal preferences | pseudonymized IDs, access control, retention policy |
-| Model drift | Quality degrades over time | scheduled retraining and metric monitoring |
-| Explainability | Users may not trust results | show predicted rating, metadata, popularity, and reasons |
-
-## 8. Proposed improvement
-
-The current app already stores feedback. A production extension should merge feedback into the training dataset, schedule retraining, and compare model variants with A/B tests.
+| Cold-start users | No personalization | top-rated and tag-based fallback |
+| No `ratings_count` in current export | no true popularity estimate | label as top-rated; future export can add count |
+| Noisy tags | bad similarity | preprocessing removes filler tags |
+| Large cosine matrix | memory cost | load once with `mmap_mode`; future top-N export |
+| Feedback not used yet | no online learning | feedback is stored for future reranking |
 
 ## 9. Installation manual
 
@@ -95,9 +120,9 @@ docker compose down
 ## 10. User manual
 
 1. Open the GUI.
-2. Select a user.
-3. Choose recommendation count.
-4. Click **Get recommendations**.
-5. Review recommendation table and chart.
-6. Save feedback if needed.
-7. Present quality metrics and risk assessment from their tabs.
+2. Choose a recommendation mode.
+3. Select a book, tag, or favorite books.
+4. Adjust the number of recommendations.
+5. Optionally enable average-rating reranking.
+6. Click **Generate recommendations**.
+7. Inspect model status and risks in the other tabs.

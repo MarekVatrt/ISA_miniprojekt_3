@@ -13,6 +13,7 @@ services:
     environment:
       - BOOKS_MODEL_PATH=/app/data/books_model.csv
       - EXPERIMENTS_PATH=/app/results/experiment_results.csv
+      - COSINE_SIM_PATH=/app/models/cosine_sim_best.npy
 
   gui:
     build:
