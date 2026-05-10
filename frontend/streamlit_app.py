@@ -119,12 +119,33 @@ with tabs[0]:
             payload.update({"mode": "auto", "title": auto_text})
             user_input = auto_text
 
+    if "last_result" not in st.session_state:
+        st.session_state.last_result = None
+
+    if "last_payload" not in st.session_state:
+        st.session_state.last_payload = None
+
+    if "last_user_input" not in st.session_state:
+        st.session_state.last_user_input = ""
+
     if st.button("Generate recommendations", type="primary"):
         try:
             result = api_post("/recommend", payload)
-            render_items(result["items"], result["strategy"], payload["mode"], user_input)
+
+            st.session_state.last_result = result
+            st.session_state.last_payload = payload.copy()
+            st.session_state.last_user_input = user_input
+
         except Exception as e:
             st.error(f"Recommendation failed: {e}")
+
+    if st.session_state.last_result is not None:
+        render_items(
+            st.session_state.last_result["items"],
+            st.session_state.last_result["strategy"],
+            st.session_state.last_payload["mode"],
+            st.session_state.last_user_input
+        )
 
 with tabs[1]:
     st.header("Deployed Mini-project 1 model")
@@ -143,9 +164,59 @@ with tabs[1]:
     st.markdown("""
     **Quality evaluation approach:** leave-one-out on sampled users. For each user, ratings ≥ 4 are relevant books; one is used as query and the rest are ground truth. Metrics: Precision@K, Recall@K, F1@K.
     """)
+with tabs[2]:
+    st.header("Risk assesment")
+    st.subheader("Book coverage")
+    st.markdown("""
+    Out reccomnedation system does not cover all books.
+    It can only recommend books that exist in the dataset used by the project (10k goodbooks dataset). 
+    If a book is not included in the dataset, the recommender cannot suggest it or compare it properly.
+    Users might come expecting the recommendation system to include all existing books, however, this is not the case.
+    
+    Risk level: Medium
+    """)
+    st.subheader("Reccomendation quality")
+    st.markdown("""
+    Content-based filtering recommends similar books based on metadata, which is useful, especially for the cold-start problem.
+    However, since we are not comparing the similarity of taste across different users, like collaborative filtering, the personalization of reccomendations is limited.
+    The system does not truly “understand” books and users. It compares text/features mathematically using a TF-IDF and cosine similarity.
+    Due to this, some recommendations may not be as accurate since the system relies only on the similarity of books using tags.
+                
+    Risk level: Low-Medium
+    """)
+    st.subheader("Dataset bias")
+    st.markdown("""
+    The recommendation system reflects the dataset it is built on.
+    If the dataset contains mostly popular, English-language, or highly rated books, the recommendations may also favor these types of books. This can make newer books, niche books, non-English books, or less popular authors less visible.
+    Because of this, the recommendations should not be considered fully neutral or representative of all books.
 
+    Risk level: Medium
+    """)
+    st.subheader("Performance and scalability")
+    st.markdown("""
+    The recommendation system may become slower if it has to compare many books at request time.
+    TF-IDF and cosine similarity work well for a dataset of this size, but performance could become an issue if the dataset grows significantly (for example to millions of books) or if many users access the application at the same time.
+    
+    Risk level: Medium
+    """)
+    st.subheader("Deployment")
+    st.markdown("""
+    The project is generally safe to deploy as a basic reccomender, since it does not use any personal data and does not create users.
+    The privacy risk is relatively low. The users can simply input the books they have liked and the appliacation outputs similar books they could like.
+
+    Risk level: Low-Medium
+    """)
+    st.subheader("User feedback limitation")
+    st.markdown("""
+    The application allows users to mark each recommendation as useful or not useful.
+    This feedback is saved into a CSV file and can be used later for analysis, reranking, or personalization. However, in the current version, the feedback is not yet used to change future recommendations automatically.
+    Because of this, the feedback system is useful for collecting evaluation data, but it does not currently improve the recommendation model in real time.
+
+    **Risk level:** Low-Medium
+    """)
 with tabs[3]:
     st.header("Installation manual")
+    st.markdown("Docker Desktop is installed and running")
     st.code("docker compose up --build", language="bash")
     st.write("Open GUI at http://localhost:8501 and API docs at http://localhost:8000/docs.")
     st.header("User manual")
