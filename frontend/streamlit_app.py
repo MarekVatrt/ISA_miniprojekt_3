@@ -7,6 +7,8 @@ import pandas as pd
 import plotly.express as px
 import requests
 import streamlit as st
+from datetime import datetime
+import uuid
 from components.visualizations import (
     plot_similarity_distribution,
     plot_rating_vs_similarity,
@@ -177,12 +179,50 @@ def run_recommendation(payload: dict, user_input: str) -> None:
     """Call the recommendation API and store the result in session_state.
     This centralizes the behaviour used by both the Generate button and automatic triggers.
     """
+    # Basic client-side validation to avoid sending bad requests to the API
+    mode = payload.get("mode")
+    if mode == "title" and not payload.get("title"):
+        st.warning("Please pick a title before requesting recommendations.")
+        return
+    if mode == "genre" and not payload.get("genre"):
+        st.warning("Please enter a genre/tag before requesting recommendations.")
+        return
+    if mode == "profile" and not payload.get("favorite_titles"):
+        st.warning("Please add favorite books to build a profile before requesting recommendations.")
+        return
+
+    # Prepare metadata for correlation (timestamp + request id). Do not print immediately
+    # — we store these in session_state so the UI can render them below the inputs/results.
+    ts = datetime.utcnow().isoformat() + "Z"
+    req_id = uuid.uuid4().hex
+
+    # Record the attempted payload so we can inspect what was sent even if the request fails.
+    st.session_state["last_payload_attempt"] = payload.copy()
+    st.session_state["last_payload_attempt_ts"] = ts
+    st.session_state["last_request_id"] = req_id
+    # clear previous error until we get a new response
+    st.session_state["last_error"] = None
+
     try:
         result = api_post("/recommend", payload)
         st.session_state.last_result = result
         st.session_state.last_payload = payload.copy()
+        st.session_state.last_payload_ts = ts
+        st.session_state.last_request_id = req_id
         st.session_state.last_user_input = user_input
+        st.session_state["last_error"] = None
     except Exception as e:
+        # try to extract response details when available (requests.HTTPError)
+        err_info: dict[str, Any] = {"error": str(e)}
+        resp = getattr(e, "response", None)
+        if resp is not None:
+            try:
+                err_info["status_code"] = resp.status_code
+                err_info["response_text"] = resp.text
+            except Exception:
+                pass
+        st.session_state["last_error"] = err_info
+        # keep last_payload_attempt present for inspection
         st.error(f"Recommendation failed: {e}")
 
 
@@ -314,16 +354,22 @@ with tabs[0]:
         all_titles = st.session_state.get("all_titles", [])
         options = [""] + all_titles if all_titles else [""]
         # create the selectbox and run recommendation when user picks a value
-        sel = st.selectbox("Book title (type to filter)", options=options, index=0, key="title_select", on_change=_on_title_select)
-        # if a selection was recorded by the on_change callback, act on it
+        st.selectbox("Book title (type to filter)", options=options, index=0, key="title_select", on_change=_on_title_select)
+        # determine the currently-selected title (prefer explicit selectbox value)
+        selected_value = st.session_state.get("title_select", "") or st.session_state.get("last_title_selected", "")
+        # if there was a new selection (recorded via callback), run it once
         if st.session_state.get("title_selected"):
             sel = st.session_state.pop("title_selected")
-            last_sel = st.session_state.get("last_title_selected", "")
-            if sel != last_sel:
+            if sel and sel != st.session_state.get("last_title_selected", ""):
                 st.session_state["last_title_selected"] = sel
+                selected_value = sel
                 payload.update({"mode": "title", "title": sel})
                 user_input = sel
                 run_recommendation(payload, user_input)
+        # ensure payload contains the last selected title so Generate will send a valid request
+        if selected_value:
+            payload.update({"mode": "title", "title": selected_value})
+            user_input = selected_value
         else:
             payload.update({"mode": "title", "title": ""})
             user_input = ""
@@ -376,16 +422,19 @@ with tabs[0]:
         st.session_state.last_user_input = ""
 
     if st.button("Generate recommendations", type="primary"):
-        run_recommendation(payload, user_input)
+        # Basic front-line validation to avoid creating a request we know will fail.
+        m = payload.get("mode")
+        if m == "title" and not payload.get("title"):
+            st.warning("Please pick a title before requesting recommendations.")
+        elif m == "genre" and not payload.get("genre"):
+            st.warning("Please enter a genre/tag before requesting recommendations.")
+        elif m == "profile" and not payload.get("favorite_titles"):
+            st.warning("Please add favorite books to build a profile before requesting recommendations.")
+        else:
+            run_recommendation(payload, user_input)
 
     # Centralized auto-run triggers (handle after inputs are displayed):
-    # - if user picked a title via title_select, stored in session_state['auto_run_title']
-    # - if favorites list changed, session_state contains <session_key>_changed flags
-    if st.session_state.get("auto_run_title"):
-        sel = st.session_state.pop("auto_run_title")
-        # payload already set above for title mode, but rebuild to be safe
-        payload.update({"mode": "title", "title": sel})
-        run_recommendation(payload, sel)
+    # if favorites list changed, session_state contains <session_key>_changed flags
 
     # profile autos
     if st.session_state.get("profile_favs_changed"):
@@ -397,13 +446,45 @@ with tabs[0]:
         st.session_state["auto_favs_changed"] = False
         run_recommendation(payload, user_input)
 
-    if st.session_state.last_result is not None:
-        render_items(
-            st.session_state.last_result["items"],
-            st.session_state.last_result["strategy"],
-            st.session_state.last_payload["mode"],
-            st.session_state.last_user_input,
-        )
+    if st.session_state.last_result is not None or st.session_state.get("last_error"):
+        # Show compact metadata about the last request attempt to aid debugging and log correlation
+        with st.expander("Last request details", expanded=False):
+            ts = st.session_state.get("last_payload_attempt_ts") or st.session_state.get("last_payload_ts")
+            req_id = st.session_state.get("last_request_id")
+            st.write(f"Timestamp (UTC): {ts}")
+            if req_id:
+                st.write(f"Request ID: {req_id}")
+            if st.session_state.get("last_payload_attempt"):
+                try:
+                    st.json(st.session_state.get("last_payload_attempt"))
+                except Exception:
+                    st.write(st.session_state.get("last_payload_attempt"))
+                # offer a download of the payload to ease correlation with backend logs
+                try:
+                    import json
+
+                    payload_str = json.dumps(st.session_state.get("last_payload_attempt"), indent=2)
+                    filename = f"payload_{req_id[:8]}_{(ts or '').replace(':', '-')}.json"
+                    st.download_button("Download payload JSON", payload_str, file_name=filename, mime="application/json")
+                except Exception:
+                    pass
+            if st.session_state.get("last_error"):
+                st.error(f"Last error: {st.session_state.get('last_error')}")
+            # show raw response when available for debugging
+            if st.session_state.get("last_result"):
+                try:
+                    st.subheader("Last raw response")
+                    st.json(st.session_state.get("last_result"))
+                except Exception:
+                    st.write(st.session_state.get("last_result"))
+
+        if st.session_state.last_result is not None:
+            render_items(
+                st.session_state.last_result["items"],
+                st.session_state.last_result["strategy"],
+                st.session_state.last_payload["mode"],
+                st.session_state.last_user_input,
+            )
 
 with tabs[1]:
     st.header("Active deployed model")
