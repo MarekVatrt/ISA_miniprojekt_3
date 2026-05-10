@@ -204,12 +204,33 @@ with tabs[0]:
             payload.update({"mode": "auto", "title": auto_text})
             user_input = auto_text
 
+    if "last_result" not in st.session_state:
+        st.session_state.last_result = None
+
+    if "last_payload" not in st.session_state:
+        st.session_state.last_payload = None
+
+    if "last_user_input" not in st.session_state:
+        st.session_state.last_user_input = ""
+
     if st.button("Generate recommendations", type="primary"):
         try:
             result = api_post("/recommend", payload)
-            render_items(result["items"], result["strategy"], payload["mode"], user_input)
+
+            st.session_state.last_result = result
+            st.session_state.last_payload = payload.copy()
+            st.session_state.last_user_input = user_input
+
         except Exception as e:
             st.error(f"Recommendation failed: {e}")
+
+    if st.session_state.last_result is not None:
+        render_items(
+            st.session_state.last_result["items"],
+            st.session_state.last_result["strategy"],
+            st.session_state.last_payload["mode"],
+            st.session_state.last_user_input
+        )
 
 with tabs[1]:
     st.header("Active deployed model")
@@ -252,28 +273,62 @@ with tabs[1]:
     )
 
 with tabs[2]:
-    st.header("Quality risks and deployment risks")
-    st.markdown(
-        """
-        | Risk | Impact | Mitigation in this app |
-        |---|---|---|
-        | Cold-start user has no history | No personalized vector | Top-rated fallback and tag-based top-rated fallback |
-        | The current full export has no `ratings_count` | We cannot measure true popularity/confidence | UI labels the fallback as **top-rated**, not popularity-based |
-        | Rating-only cold start can favor niche books with high average rating | Some results may be less broadly trusted | Future improvement: add `ratings_count` from the original Goodbooks `books.csv` |
-        | Noisy Goodreads tags like `to-read`, `favorites` | Bad content representation | MP1 preprocessing removes filler tags and uses cleaned tag profiles |
-        | Hybrid score can be misinterpreted | Users may set unclear weights | UI uses one content-weight slider; backend normalizes weights |
-        | Sparse user histories in evaluation | Low absolute Precision@10 | Metrics are interpreted against the 10k-book catalog and qualitative tests are included |
-        | Duplicate or confusing IDs | Wrong joins or wrong book ordering | `record_id` is kept stable and `cosine_sim_best.npy` must match the CSV row order |
-        | Memory use of full cosine matrix | 10k × 10k matrix is large | API loads it once via `mmap_mode`; for larger datasets use top-N export or FAISS |
-        | Feedback not used for retraining yet | No online learning from users | Feedback buttons save data for future supervised reranking |
-        """
-    )
-    st.info(
-        "Improvement proposal for 3.1.C: add ratings_count to the export, use saved useful/not-useful feedback to learn a reranker, personalize tag weights, and monitor recommendation drift."
-    )
+    st.header("Risk assesment")
+    st.subheader("Book coverage")
+    st.markdown("""
+    Out reccomnedation system does not cover all books.
+    It can only recommend books that exist in the dataset used by the project (10k goodbooks dataset). 
+    If a book is not included in the dataset, the recommender cannot suggest it or compare it properly.
+    Users might come expecting the recommendation system to include all existing books, however, this is not the case.
+    
+    Risk level: Medium
+    """)
+    st.subheader("Reccomendation quality")
+    st.markdown("""
+    Content-based filtering recommends similar books based on metadata, which is useful, especially for the cold-start problem.
+    However, since we are not comparing the similarity of taste across different users, like collaborative filtering, the personalization of reccomendations is limited.
+    The system does not truly “understand” books and users. It compares text/features mathematically using a TF-IDF and cosine similarity.
+    Due to this, some recommendations may not be as accurate since the system relies only on the similarity of books using tags.
+                
+    Risk level: Low-Medium
+    """)
+    st.subheader("Dataset bias")
+    st.markdown("""
+    The recommendation system reflects the dataset it is built on.
+    If the dataset contains mostly popular, English-language, or highly rated books, the recommendations may also favor these types of books. This can make newer books, niche books, non-English books, or less popular authors less visible.
+    Because of this, the recommendations should not be considered fully neutral or representative of all books.
+
+    Risk level: Medium
+    """)
+    st.subheader("Performance and scalability")
+    st.markdown("""
+    The recommendation system may become slower if it has to compare many books at request time.
+    TF-IDF and cosine similarity work well for a dataset of this size, but performance could become an issue if the dataset grows significantly (for example to millions of books) or if many users access the application at the same time.
+    
+    Risk level: Medium
+    """)
+    st.subheader("Deployment")
+    st.markdown("""
+    The project is generally safe to deploy as a basic reccomender, since it does not use any personal data and does not create users.
+    The privacy risk is relatively low. The users can simply input the books they have liked and the appliacation outputs similar books they could like.
+
+    Risk level: Low-Medium
+    """)
+    st.subheader("User feedback limitation")
+    st.markdown("""
+    The application allows users to mark each recommendation as useful or not useful.
+    This feedback is saved into a CSV file and can be used later for analysis, reranking, or personalization. However, in the current version, the feedback is not yet used to change future recommendations automatically.
+    Because of this, the feedback system is useful for collecting evaluation data, but it does not currently improve the recommendation model in real time.
+
+    **Risk level:** Low-Medium
+    """)
 
 with tabs[3]:
     st.header("Installation manual")
+    st.markdown("" \
+    "1. Docker desktop is installed and running" \
+    "2. Open terminal in the project folder and run:"
+    "")
     st.code("docker compose up --build", language="bash")
     st.write("Open GUI at http://localhost:8501 and API docs at http://localhost:8000/docs.")
     st.header("User manual")
