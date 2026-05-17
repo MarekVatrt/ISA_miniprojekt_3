@@ -43,19 +43,8 @@ def _normalize_weights(
         return 1.0, 0.0
     return sw / total, rw / total
 
-
+#class pre rekomendacny model CBF
 class ContentBasedBookRecommender:
-    """Deployment version of the Mini-project 1 Goodbooks content recommender.
-
-    Core model:
-    cleaned ``tags_string`` profiles -> TF-IDF with max_features=5000 -> cosine similarity.
-
-    Optional reranking:
-    similarity score can be blended with normalized ``average_rating``. The current
-    full export does not contain a real ``ratings_count`` column, so cold-start
-    recommendations are intentionally labelled as *top-rated*, not popularity-based.
-    """
-
     def __init__(
         self,
         books_path: str,
