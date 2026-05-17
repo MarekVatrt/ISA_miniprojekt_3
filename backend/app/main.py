@@ -10,25 +10,29 @@ from pydantic import BaseModel, Field
 
 from .recommender import ContentBasedBookRecommender
 
+#nacitame cesty k suborom
 BOOKS_MODEL_PATH = os.environ.get(
-    "BOOKS_MODEL_PATH", "/app/data/sample/books_model.csv"
+    "BOOKS_MODEL_PATH", "/app/data/books_model.csv"
 )
 EXPERIMENTS_PATH = os.environ.get(
     "EXPERIMENTS_PATH", "/app/results/experiment_results.csv"
 )
-# Do not rely on a precomputed .npy file in the repository. Default to None so the
-# recommender builds the TF-IDF and cosine-similarity matrix at startup.
+
 COSINE_SIM_PATH = os.environ.get("COSINE_SIM_PATH", None)
+#pripadny novy csv file sa ulozi sem
 ACTIVE_UPLOAD_PATH = "/app/data/uploaded_books_model.csv"
 
+#instancia web appky 
 app = FastAPI(
     title="Mini-project 3: Goodbooks Content-Based Recommender",
-    description="Production deployment of Mini-project 1: TF-IDF over cleaned book tags + cosine similarity with optional average-rating reranking.",
-    version="1.0.0",
+    description="Production deployment of Mini-project 1: TF-IDF over cleaned book tags + cosine similarity with optional average-rating reranking."
 )
+#cbf model
 model = ContentBasedBookRecommender(BOOKS_MODEL_PATH, EXPERIMENTS_PATH, COSINE_SIM_PATH)
 
-
+#definovanie requestov
+#mode je sposob recommendation (cold start, user profile..)
+#slidery pre hybrid recc, pocet reccs
 class RecommendRequest(BaseModel):
     mode: str = Field("title", description="title | genre | profile | global | auto")
     title: str | None = None
@@ -42,7 +46,7 @@ class RecommendRequest(BaseModel):
     similarity_weight: float = Field(0.8, ge=0, le=1)
     rating_weight: float = Field(0.2, ge=0, le=1)
 
-
+#forma feedbacku (info o knihe + useful/not useful)
 class FeedbackRequest(BaseModel):
     mode: str
     user_input: str = ""
@@ -50,7 +54,7 @@ class FeedbackRequest(BaseModel):
     decision: str = Field(..., description="useful | not_useful")
     comment: str = ""
 
-
+#pomocne endpointy pre app
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -72,7 +76,9 @@ def experiments() -> dict[str, Any]:
         return {"experiments": []}
     return {"experiments": model.experiments_df.to_dict(orient="records")}
 
-
+#recc endpoint
+#kontrola weights, aby neboli nulove
+#podla mode sa spusti metoda modelu
 @app.post("/recommend")
 def recommend(req: RecommendRequest) -> dict[str, Any]:
     total = req.similarity_weight + req.rating_weight
@@ -113,7 +119,7 @@ def recommend(req: RecommendRequest) -> dict[str, Any]:
         "items": model.by_title(req.title, req.n, req.hybrid, sw, rw),
     }
 
-
+#ulozenie feedbacku do feedback.csv
 @app.post("/feedback")
 def feedback(req: FeedbackRequest) -> dict[str, Any]:
     if req.decision not in {"useful", "not_useful"}:
@@ -122,7 +128,8 @@ def feedback(req: FeedbackRequest) -> dict[str, Any]:
         req.mode, req.user_input, req.title, req.decision, req.comment
     )
 
-
+#pocas behu je mozne uploadnut vlastny "model" (csv file)
+#ak csv subor nebude mat required columns tak nebude funogvat
 @app.post("/upload-books-model")
 async def upload_books_model(file: UploadFile = File(...)) -> dict[str, Any]:
     if not file.filename.endswith(".csv"):
@@ -139,7 +146,7 @@ async def upload_books_model(file: UploadFile = File(...)) -> dict[str, Any]:
         "model_info": model.model_info,
     }
 
-
+#resetovanie modelu
 @app.post("/reset-sample-model")
 def reset_sample_model() -> dict[str, Any]:
     global model

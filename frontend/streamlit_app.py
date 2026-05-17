@@ -598,12 +598,27 @@ with tabs[3]:
     st.header("User manual")
     st.markdown(
         """
-        1. Choose a recommendation mode.
-        2. Select a book title, tag/genre, or several favorite books.
-        3. Adjust the number of recommendations.
-        4. Optionally enable average-rating reranking and choose the content-similarity weight.
-        5. Click **Generate recommendations**.
-        6. Mark recommendations as useful/not useful to collect feedback.
-        7. Use `/model-info` or the Model tab to verify that the model is ready.
+
+## Goal
+
+The application recommends books using content-based filtering from Goodbooks tag profiles.
+
+## Recommendation modes
+
+1. **Similar books by title** — choose one known book and receive books with similar cleaned tags.
+2. **Cold start: top-rated books** — for users with no preferences yet; ranks by `average_rating`.
+3. **Cold start: top-rated by tag** — enter a tag/genre such as `fantasy`, `dystopia`, or `mystery`; results are ranked by `average_rating`.
+4. **User profile from favorite books** — select several favorite books; the system builds an average TF-IDF user vector.
+5. **Smart mode** — automatically chooses the strategy based on the input.
+
+## Options
+
+- `Number of recommendations`: top-N result size.
+- `Use average-rating reranking`: for similarity-based modes, combines content similarity with normalized rating.
+- `Content similarity weight`: controls the reranking formula. Rating weight is automatically computed as `1 - content_weight`.
+
+## Feedback
+
+Open a recommendation card and click **Useful**. The app stores this feedback for future improvements.
         """
     )

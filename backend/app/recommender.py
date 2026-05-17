@@ -12,8 +12,11 @@ import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
+#base vahy pre reccomendations
 SIMILARITY_WEIGHT_DEFAULT = 0.8
 RATING_WEIGHT_DEFAULT = 0.2
+
+#columns ktore musi csv subor obsahovat
 REQUIRED_COLUMNS = {
     "record_id",
     "goodreads_book_id",
@@ -23,16 +26,16 @@ REQUIRED_COLUMNS = {
     "tags_string",
 }
 
-
+#vyhladavanie patterns, ignrovanie velkych/malych pismen
 def _safe_contains(series: pd.Series, text: str) -> pd.Series:
     pattern = re.escape(str(text).strip().lower())
     return series.fillna("").str.lower().str.contains(pattern, regex=True)
 
 
+#normlizacia vah na 1.0
 def _normalize_weights(
     similarity_weight: float, rating_weight: float
 ) -> tuple[float, float]:
-    """Normalize weights so UI edge cases like 1.0 + 1.0 behave as 50/50."""
     sw = max(float(similarity_weight), 0.0)
     rw = max(float(rating_weight), 0.0)
     total = sw + rw
@@ -59,6 +62,7 @@ class ContentBasedBookRecommender:
         experiments_path: str | None = None,
         cosine_sim_path: str | None = None,
     ):
+        #cesty k suborom, premenne, logger
         self.books_path = books_path
         self.experiments_path = experiments_path
         self.cosine_sim_path = cosine_sim_path
@@ -92,10 +96,12 @@ class ContentBasedBookRecommender:
         """
         start = perf_counter()
         self.books_df = pd.read_csv(self.books_path)
+        #kontrola missing columns
         missing = REQUIRED_COLUMNS - set(self.books_df.columns)
         if missing:
             raise ValueError(f"books_model.csv is missing columns: {sorted(missing)}")
 
+        #cistenie datasetu pre dataset (nas vlozeny dataset je uz vycisteny z miniprojektu 1)
         self.books_df["tags_string"] = (
             self.books_df["tags_string"].fillna("").astype(str)
         )
@@ -104,8 +110,8 @@ class ContentBasedBookRecommender:
             self.books_df["average_rating"], errors="coerce"
         ).fillna(0.0)
 
-        # Do not create fake ratings_count=1. If the exported dataset has no count,
-        # we use average_rating only and label the fallback as top-rated.
+        #v datasete nemame ratings_count, tak pouzivame top rating na cold start
+        #ak by sme ho mali, pouzili by sme ratings_count
         self.has_ratings_count = "ratings_count" in self.books_df.columns
         if self.has_ratings_count:
             self.books_df["ratings_count"] = (
@@ -119,33 +125,28 @@ class ContentBasedBookRecommender:
         self.books_df["normalized_average_rating"] = self._normalize_rating_series(
             self.books_df["average_rating"]
         )
-        # This is the score used for cold-start ranking in the current project export.
+        #average_rating je zaroven top_rating, ktore pouzivame na reccomendations
         self.books_df["top_rated_score"] = self.books_df["average_rating"]
 
-        # Build TF-IDF matrix (max_features chosen to be memory conscious)
+        #tf-idf s 5000 features
         self.logger.info("Building TF-IDF matrix (max_features=5000)")
         self.tfidf = TfidfVectorizer(stop_words="english", max_features=5000)
         self.tfidf_matrix = self.tfidf.fit_transform(self.books_df["tags_string"])
-        # Keep the first occurrence of duplicate titles for deterministic lookup.
+        
         self.indices = pd.Series(
             self.books_df.index, index=self.books_df["title"]
         ).drop_duplicates(keep="first")
 
-        # Compute cosine similarity in memory in chunks to provide progress
-        # updates and reduce peak temporary memory. The final matrix is kept
-        # as float32 to save memory while preserving precision for ranking.
-        self.logger.info("Computing cosine similarity matrix (this may take a while)")
+        self.logger.info("Computing cosine similarity matrix")
         t0 = perf_counter()
         n_rows = self.tfidf_matrix.shape[0]
-        # pre-allocate final matrix as float32
         try:
             self.cosine_sim = np.empty((n_rows, n_rows), dtype=np.float32)
         except Exception as e:
             self.logger.exception("Failed to allocate cosine similarity matrix: %s", e)
             raise
 
-        # Choose chunk size based on dataset size to balance memory and speed.
-        # For 10k rows, 500-row chunks produce ~20 iterations which is a good tradeoff.
+        #pocitanie cosine similarity v chunkoch s velkostou 500
         chunk_size = 500 if n_rows > 1000 else n_rows
         computed = 0
         for start_idx in range(0, n_rows, chunk_size):
@@ -153,7 +154,7 @@ class ContentBasedBookRecommender:
             block = cosine_similarity(
                 self.tfidf_matrix[start_idx:end_idx], self.tfidf_matrix
             )
-            # cast to float32 to reduce memory usage
+            #aby sme moc nezaplnili pamat, ulozime ako float32
             self.cosine_sim[start_idx:end_idx, :] = block.astype(np.float32)
             computed = end_idx
             pct = computed / n_rows * 100
@@ -213,6 +214,7 @@ class ContentBasedBookRecommender:
             return pd.Series([0.5] * len(ratings), index=ratings.index)
         return (ratings - self.rating_min) / (self.rating_max - self.rating_min)
 
+    #aplikujeme hybrid skore similarity a rating
     def _apply_hybrid_score(
         self,
         df: pd.DataFrame,
@@ -232,6 +234,7 @@ class ContentBasedBookRecommender:
             columns=["rating_component"]
         )
 
+    #naformatovanie vyslednej tabulky
     def _format(self, df: pd.DataFrame, n: int) -> list[dict]:
         base_cols = [
             "record_id",
@@ -263,6 +266,7 @@ class ContentBasedBookRecommender:
         mask = _safe_contains(self.books_df["title"], query)
         return self.books_df.loc[mask, "title"].head(limit).tolist()
 
+    #cold start - vrati globalne top rated knih7
     def global_top_rated(self, n: int = 10) -> list[dict]:
         assert self.books_df is not None
         df = self.books_df.sort_values(
@@ -270,6 +274,7 @@ class ContentBasedBookRecommender:
         )
         return self._format(df, n)
 
+    #cold start - vrati top rated knihy podla zadaneho zanru
     def genre_top_rated(self, genre: str, n: int = 10) -> list[dict]:
         assert self.books_df is not None
         df = self.books_df[_safe_contains(self.books_df["tags_string"], genre)]
@@ -298,6 +303,7 @@ class ContentBasedBookRecommender:
     ) -> list[dict]:
         return self.genre_top_rated(genre, n)
 
+    #top vysledky pre konkretnu knihu
     def by_title(
         self,
         title: str,
@@ -326,6 +332,8 @@ class ContentBasedBookRecommender:
             )
         return self._format(df, n)
 
+    #zo zadanych oblubenych knih vytvorime "priemer" tf-idf vektorov (user profile)
+    #hladame najpodobnejsie knihy tomuto priemeru
     def user_profile(
         self,
         favorite_titles: Iterable[str],
@@ -347,7 +355,9 @@ class ContentBasedBookRecommender:
             return []
 
         book_vectors = self.tfidf_matrix[valid_indices].toarray()
+        #vytvoreny priemer
         user_profile = np.mean(book_vectors, axis=0)
+        #podobnosti
         similarities = cosine_similarity(
             user_profile.reshape(1, -1), self.tfidf_matrix
         )[0]
@@ -361,6 +371,7 @@ class ContentBasedBookRecommender:
             )
         return self._format(df, n)
 
+    #"smart" mod, podla vstupu sa rozhodne co robit
     def final(
         self,
         user_input,
@@ -369,11 +380,13 @@ class ContentBasedBookRecommender:
         similarity_weight: float = SIMILARITY_WEIGHT_DEFAULT,
         rating_weight: float = RATING_WEIGHT_DEFAULT,
     ) -> dict:
+        #ak nie je ziadny input - cold start
         if user_input is None or user_input == "":
             return {
                 "strategy": "Cold start: top-rated books",
                 "items": self.global_top_rated(n),
             }
+        #ak pouzivatel zadal oblubene knihy - podobne knihy
         if isinstance(user_input, list):
             return {
                 "strategy": "User profile recommender: average TF-IDF vector of favorite books",
@@ -381,6 +394,7 @@ class ContentBasedBookRecommender:
                     user_input, n, hybrid, similarity_weight, rating_weight
                 ),
             }
+        #word aelbo tags - reccomendations podla tags
         words = str(user_input).strip().split()
         if len(words) <= 3:
             return {
@@ -400,6 +414,7 @@ class ContentBasedBookRecommender:
             "items": self.genre_top_rated(str(user_input), n),
         }
 
+    #ukladanie feedbacku do feedback.csv
     def save_feedback(
         self, mode: str, user_input: str, title: str, decision: str, comment: str = ""
     ) -> dict:
