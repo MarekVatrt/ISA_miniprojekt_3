@@ -74,13 +74,8 @@ class ContentBasedBookRecommender:
             self.logger.addHandler(handler)
         self.load()
 
+    #nacitanie datasetu, validacia columns a vytovrenie tf-idf, cosine similarity
     def load(self) -> None:
-        """Load dataset, validate columns, build TF-IDF and cosine similarity.
-
-        This method always builds the TF-IDF matrix and computes the cosine
-        similarity matrix in memory. It will not rely on a precomputed .npy
-        file by default.
-        """
         start = perf_counter()
         self.books_df = pd.read_csv(self.books_path)
         #kontrola missing columns
@@ -208,10 +203,6 @@ class ContentBasedBookRecommender:
         similarity_weight: float,
         rating_weight: float,
     ) -> pd.DataFrame:
-        """Rerank similarity candidates with normalized average rating.
-
-        If the UI sends weights 1.0 and 1.0, they are normalized to 0.5 and 0.5.
-        """
         df = df.copy()
         sw, rw = _normalize_weights(similarity_weight, rating_weight)
         df["rating_component"] = self._normalize_rating_series(df["average_rating"])
@@ -356,49 +347,6 @@ class ContentBasedBookRecommender:
                 df, "similarity", similarity_weight, rating_weight
             )
         return self._format(df, n)
-
-    #"smart" mod, podla vstupu sa rozhodne co robit
-    def final(
-        self,
-        user_input,
-        n: int = 10,
-        hybrid: bool = True,
-        similarity_weight: float = SIMILARITY_WEIGHT_DEFAULT,
-        rating_weight: float = RATING_WEIGHT_DEFAULT,
-    ) -> dict:
-        #ak nie je ziadny input - cold start
-        if user_input is None or user_input == "":
-            return {
-                "strategy": "Cold start: top-rated books",
-                "items": self.global_top_rated(n),
-            }
-        #ak pouzivatel zadal oblubene knihy - podobne knihy
-        if isinstance(user_input, list):
-            return {
-                "strategy": "User profile recommender: average TF-IDF vector of favorite books",
-                "items": self.user_profile(
-                    user_input, n, hybrid, similarity_weight, rating_weight
-                ),
-            }
-        #word aelbo tags - reccomendations podla tags
-        words = str(user_input).strip().split()
-        if len(words) <= 3:
-            return {
-                "strategy": f"Cold start: top-rated books for tag '{user_input}'",
-                "items": self.genre_top_rated(str(user_input), n),
-            }
-        title_recs = self.by_title(
-            str(user_input), n, hybrid, similarity_weight, rating_weight
-        )
-        if title_recs:
-            return {
-                "strategy": f"Content-based filtering for '{user_input}'",
-                "items": title_recs,
-            }
-        return {
-            "strategy": f"Fallback: top-rated books for tag '{user_input}'",
-            "items": self.genre_top_rated(str(user_input), n),
-        }
 
     #ukladanie feedbacku do feedback.csv
     def save_feedback(
