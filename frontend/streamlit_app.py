@@ -7,27 +7,37 @@ import pandas as pd
 import plotly.express as px
 import requests
 import streamlit as st
+
 from datetime import datetime
 import uuid
+
+# Importing visualization functions from a separate module, histogram of similarity scores and scatter plot of rating vs similarity for the recommended items.
 from components.visualizations import (
     plot_similarity_distribution,
     plot_rating_vs_similarity,
 )
 
+# Load API URL from environment variable, default to localhost if not set
 API_URL = os.environ.get("API_URL", "http://localhost:8000")
+
+# Basic Streamlit page configuration
 st.set_page_config(
     page_title="Mini-project 3 | Goodbooks Recommender",
     page_icon="📚",
     layout="wide",
 )
 
+# Helper functions for API calls
 
+# Helper function for GET requests to the API. It constructs the full URL, sends the request and returns the JSON response as dictionary. It also raises an exception if the request fails.
 def api_get(path: str, **params) -> dict[str, Any]:
     r = requests.get(f"{API_URL}{path}", params=params, timeout=20)
     r.raise_for_status()
     return r.json()
 
-
+# Helper function for POST requests to the API. Similar to api_get, 
+# sends a JSON payload and returns the JSON response. 
+# Used for actions like requesting recommendations or sending feedback.
 def api_post(path: str, payload: dict[str, Any]) -> dict[str, Any]:
     r = requests.post(f"{API_URL}{path}", json=payload, timeout=30)
     r.raise_for_status()
@@ -36,14 +46,18 @@ def api_post(path: str, payload: dict[str, Any]) -> dict[str, Any]:
 
 def render_suggestion_buttons(suggestions, key_prefix, n_cols=5):
     """Render suggestions as clickable buttons laid out in n_cols columns.
-    Returns the clicked suggestion (string) or None.
+    Returns the clicked suggestion (string) or None (if user doesn't click any).
     """
     selected = None
+
+    # If suggestions is empty or None, do not render anything and return None
     if suggestions:
+        # Creates layout with n_cols columns
         cols = st.columns(n_cols)
+        # Iterate over suggestions and create a button for each
         for i, s in enumerate(suggestions):
             col = cols[i % n_cols]
-            # use a stable unique key per suggestion button
+            # Use a stable unique key per suggestion button
             if col.button(s, key=f"{key_prefix}_sugg_{i}"):
                 selected = s
     return selected
@@ -55,14 +69,17 @@ def favorites_manager(session_key="favorites_list", input_key="fav_input", sugge
     - input_key: session_state key for the free-text input used to search/add
     Returns the current favorites list.
     """
-    # ensure state keys exist
+    # If favorites list doesnt exist in session_state, initialize it as an empty list
     if session_key not in st.session_state:
         st.session_state[session_key] = []
 
+    # Flag to track if the favorites list was changed
     changed_flag = f"{session_key}_changed"
+    
     if changed_flag not in st.session_state:
         st.session_state[changed_flag] = False
 
+    # Flag that indicates whether the input should be cleared on the next run
     clear_flag = f"{input_key}_clear"
     if clear_flag not in st.session_state:
         st.session_state[clear_flag] = False
@@ -70,7 +87,7 @@ def favorites_manager(session_key="favorites_list", input_key="fav_input", sugge
     if input_key not in st.session_state:
         st.session_state[input_key] = ""
 
-    # if a previous action requested clearing the input, do it before creating widgets
+    # If a previous action requested clearing the input, do it before creating widgets
     if st.session_state.get(clear_flag):
         st.session_state[input_key] = ""
         st.session_state[clear_flag] = False
@@ -84,14 +101,14 @@ def favorites_manager(session_key="favorites_list", input_key="fav_input", sugge
             st.session_state[session_key].append(sel)
             st.session_state[changed_flag] = True
 
-    # allow adding the typed value explicitly (schedule clear for next run)
+    # Allow adding the typed value explicitly (schedule clear for next run)
     if st.button("Add typed", key=f"{input_key}_add_typed"):
         typed = st.session_state.get(input_key, "").strip()
         if typed and typed not in st.session_state[session_key]:
             st.session_state[session_key].append(typed)
             st.session_state[changed_flag] = True
 
-    # display current favorites with remove buttons
+    # Display current favorites with remove buttons
     if st.session_state[session_key]:
         st.write("Current favorites:")
         for i, s in enumerate(list(st.session_state[session_key])):
@@ -101,6 +118,7 @@ def favorites_manager(session_key="favorites_list", input_key="fav_input", sugge
                 st.session_state[session_key].pop(i)
                 st.session_state[changed_flag] = True
 
+    # Returns the current favorites list from session_state
     return st.session_state[session_key]
 
 

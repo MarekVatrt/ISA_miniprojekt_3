@@ -60,12 +60,10 @@ class ContentBasedBookRecommender:
         self,
         books_path: str,
         experiments_path: str | None = None,
-        cosine_sim_path: str | None = None,
     ):
         #cesty k suborom, premenne, logger
         self.books_path = books_path
         self.experiments_path = experiments_path
-        self.cosine_sim_path = cosine_sim_path
         self.books_df: pd.DataFrame | None = None
         self.tfidf: TfidfVectorizer | None = None
         self.tfidf_matrix = None
@@ -202,7 +200,6 @@ class ContentBasedBookRecommender:
             "best_experiment": best,
             "source": "Mini-project 1 notebooks: preprocessing + recsys",
             "books_path": self.books_path,
-            "cosine_sim_path": self.cosine_sim_path,
             "cosine_sim_loaded_from_file": self.cosine_sim_loaded_from_file,
             "cosine_sim_shape": list(self.cosine_sim.shape) if self.cosine_sim is not None else None,
             "cosine_sim_dtype": str(self.cosine_sim.dtype) if self.cosine_sim is not None else None,

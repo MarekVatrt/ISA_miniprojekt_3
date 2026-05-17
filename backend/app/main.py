@@ -11,14 +11,10 @@ from pydantic import BaseModel, Field
 from .recommender import ContentBasedBookRecommender
 
 #nacitame cesty k suborom
-BOOKS_MODEL_PATH = os.environ.get(
-    "BOOKS_MODEL_PATH", "/app/data/books_model.csv"
-)
+BOOKS_MODEL_PATH = os.environ.get("BOOKS_MODEL_PATH", "/app/data/books_model.csv")
 EXPERIMENTS_PATH = os.environ.get(
     "EXPERIMENTS_PATH", "/app/results/experiment_results.csv"
 )
-
-COSINE_SIM_PATH = os.environ.get("COSINE_SIM_PATH", None)
 #pripadny novy csv file sa ulozi sem
 ACTIVE_UPLOAD_PATH = "/app/data/uploaded_books_model.csv"
 
@@ -28,7 +24,7 @@ app = FastAPI(
     description="Production deployment of Mini-project 1: TF-IDF over cleaned book tags + cosine similarity with optional average-rating reranking."
 )
 #cbf model
-model = ContentBasedBookRecommender(BOOKS_MODEL_PATH, EXPERIMENTS_PATH, COSINE_SIM_PATH)
+model = ContentBasedBookRecommender(BOOKS_MODEL_PATH, EXPERIMENTS_PATH)
 
 #definovanie requestov
 #mode je sposob recommendation (cold start, user profile..)
@@ -137,9 +133,7 @@ async def upload_books_model(file: UploadFile = File(...)) -> dict[str, Any]:
     content = await file.read()
     Path(ACTIVE_UPLOAD_PATH).write_bytes(content)
     global model
-    model = ContentBasedBookRecommender(
-        ACTIVE_UPLOAD_PATH, EXPERIMENTS_PATH, COSINE_SIM_PATH
-    )
+    model = ContentBasedBookRecommender(ACTIVE_UPLOAD_PATH, EXPERIMENTS_PATH)
     return {
         "uploaded": True,
         "active_path": ACTIVE_UPLOAD_PATH,
@@ -150,7 +144,5 @@ async def upload_books_model(file: UploadFile = File(...)) -> dict[str, Any]:
 @app.post("/reset-sample-model")
 def reset_sample_model() -> dict[str, Any]:
     global model
-    model = ContentBasedBookRecommender(
-        BOOKS_MODEL_PATH, EXPERIMENTS_PATH, COSINE_SIM_PATH
-    )
+    model = ContentBasedBookRecommender(BOOKS_MODEL_PATH, EXPERIMENTS_PATH)
     return {"reset": True, "model_info": model.model_info}
